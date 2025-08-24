@@ -15,7 +15,7 @@ IDX_PATH = INDEX_DIR / "index.faiss"
 META_PATH = INDEX_DIR / "index_meta.pkl"
 EMBED_MODEL_NAME = "sentence-transformers/sentence-t5-large"
 K = 3
-MIN_SCORE = 0.25  # cosine similarity threshold (still used internally)
+MIN_SCORE = 0.25  # cosine similarity threshold
 
 
 @st.cache_resource(show_spinner=False)
@@ -75,7 +75,7 @@ ANSWER:"""
 # ----------------- UI -------------------
 st.title("🧠 HyDE RAG")
 
-# keep a conversation history in session state
+# store conversation history
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -116,12 +116,19 @@ if st.button("Ask") and query.strip():
             else:
                 answer = str(resp)
 
-    # store in history
+    # show current answer immediately
+    st.markdown("### Latest Answer")
+    st.markdown(f"**Q:** {query}")
+    st.markdown(f"**A:** {answer}")
+
+    # push into history AFTER displaying
     st.session_state.history.append({"question": query, "answer": answer})
 
-# ----------------- Show conversation -------------------
-st.markdown("## Conversation History")
-for i, turn in enumerate(st.session_state.history, 1):
-    st.markdown(f"**Q{i}:** {turn['question']}")
-    st.markdown(f"**A{i}:** {turn['answer']}")
-    st.markdown("---")
+
+# ----------------- Show conversation history -------------------
+if st.session_state.history:
+    st.markdown("## Conversation History")
+    for i, turn in enumerate(st.session_state.history[:-1], 1):  # exclude latest
+        st.markdown(f"**Q{i}:** {turn['question']}")
+        st.markdown(f"**A{i}:** {turn['answer']}")
+        st.markdown("---")
