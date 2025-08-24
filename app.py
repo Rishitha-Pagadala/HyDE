@@ -43,10 +43,12 @@ def get_hf_client():
         st.stop()
     return InferenceClient(model="google/gemma-2-9b", token=token)
 
-def embed_query(query: str, embedder: SentenceTransformer):
-    vec = embedder.encode([query], convert_to_numpy=True)
+
+def embed_text(text: str, embedder: SentenceTransformer):
+    vec = embedder.encode([text], convert_to_numpy=True)
     vec = vec / np.linalg.norm(vec, axis=1, keepdims=True)  # normalize for cosine
     return vec.astype("float32")
+
 
 def search(index, meta, qvec, top_k=K):
     D, I = index.search(qvec, top_k)
@@ -56,6 +58,7 @@ def search(index, meta, qvec, top_k=K):
             continue
         results.append((meta[idx]["text"], meta[idx]["source"], float(score)))
     return results
+
 
 def make_prompt(context_chunks, question):
     context_text = "\n\n---\n\n".join([c for c in context_chunks])
@@ -72,8 +75,33 @@ ANSWER:"""
     return prompt
 
 
+def generate_hypothetical_doc(client, question: str) -> str:
+    """Generate hypothetical answer (HyDE step)."""
+    hypo_prompt = f"""Generate a short hypothetical answer to the following question.
+This does not need to be factually correct, it just represents what a good answer might look like.
+
+QUESTION: {question}
+
+HYPOTHETICAL ANSWER:"""
+
+    try:
+        resp = client.text_generation(hypo_prompt, max_new_tokens=128, do_sample=False, temperature=0.7)
+    except Exception as e:
+        st.error(f"Error generating hypothetical document: {e}")
+        return question  # fallback to raw query
+
+    if isinstance(resp, dict):
+        return resp.get("generated_text") or resp.get("text") or question
+    elif isinstance(resp, list) and len(resp) > 0:
+        first = resp[0]
+        if isinstance(first, dict):
+            return first.get("generated_text") or first.get("text") or question
+        return str(first)
+    return str(resp)
+
+
 # ----------------- UI -------------------
-st.title("🧠 HyDE RAG")
+st.title("HyDE RAG")
 
 # store conversation history
 if "history" not in st.session_state:
@@ -87,41 +115,48 @@ if st.button("Ask") and query.strip():
         index, metadata = load_faiss_index()
         client = get_hf_client()
 
-    qvec = embed_query(query, embedder)
-    results = search(index, metadata, qvec, top_k=K)
+    # STEP 1: HyDE hypothetical doc
+    with st.spinner("Generating hypothetical answer (HyDE)..."):
+        hypo_doc = generate_hypothetical_doc(client, query)
 
+    # STEP 2: Embed hypothetical doc, not raw query
+    qvec = embed_text(hypo_doc, embedder)
+
+    # STEP 3: Retrieve using FAISS
+    results = search(index, metadata, qvec, top_k=K)
     filtered = [r for r in results if r[2] >= MIN_SCORE]
+
     if not filtered:
         answer = "The context does not provide this information."
     else:
         context_chunks = [txt for txt, _, _ in filtered]
         prompt = make_prompt(context_chunks, query)
 
-        with st.spinner("Generating answer from model..."):
+        # STEP 4: Final grounded answer
+        with st.spinner("Generating final answer..."):
             try:
                 resp = client.text_generation(prompt, max_new_tokens=256, do_sample=False, temperature=0.2)
             except Exception as e:
                 st.error(f"Error from HF Inference API: {e}")
                 raise
 
-            # parse response
-            if isinstance(resp, list) and len(resp) > 0:
+            if isinstance(resp, dict):
+                answer = resp.get("generated_text") or resp.get("text") or str(resp)
+            elif isinstance(resp, list) and len(resp) > 0:
                 first = resp[0]
                 if isinstance(first, dict):
                     answer = first.get("generated_text") or first.get("text") or str(first)
                 else:
                     answer = str(first)
-            elif isinstance(resp, dict):
-                answer = resp.get("generated_text") or resp.get("text") or str(resp)
             else:
                 answer = str(resp)
 
-    # show current answer immediately
+    # Show latest answer
     st.markdown("### Latest Answer")
     st.markdown(f"**Q:** {query}")
     st.markdown(f"**A:** {answer}")
 
-    # push into history AFTER displaying
+    # Add to history
     st.session_state.history.append({"question": query, "answer": answer})
 
 
