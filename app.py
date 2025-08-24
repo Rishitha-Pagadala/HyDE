@@ -43,7 +43,7 @@ def get_hf_client():
     if not token:
         st.error("HF token not found. Add HF_TOKEN to Streamlit secrets.")
         st.stop()
-    return InferenceClient(model="google/flan-t5-large", token=token)
+    return InferenceClient(model="google/gemma-2-9b", token=token)
 
 def embed_query(query: str, embedder: SentenceTransformer):
     vec = embedder.encode([query], convert_to_numpy=True)
